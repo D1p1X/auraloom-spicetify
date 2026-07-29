@@ -1,0 +1,14 @@
+{
+  "name": "auraloom-spicetify",
+  "version": "1.1.0",
+  "private": false,
+  "description": "Auraloom — a layered, audio-reactive visual studio Custom App for Spicetify.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "check": "node --check index.js && node scripts/check.mjs",
+    "build:release": "node scripts/build-release.mjs",
+    "install:local": "node scripts/install.mjs",
+    "install-to-spicetify": "npm run install:local"
+  }
+}
