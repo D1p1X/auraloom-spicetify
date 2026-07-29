@@ -10,8 +10,11 @@ const source = await readFile(sourcePath, "utf8");
 
 const requiredManifestFields = ["name", "description", "preview", "readme", "icon", "active-icon"];
 const missing = requiredManifestFields.filter((field) => !manifest[field]);
-if (missing.length) throw new Error(`manifest.json is missing: ${missing.join(", ")}`);
+if (missing.length) throw new Error("manifest.json is missing: " + missing.join(", "));
 if (!Array.isArray(manifest.tags) || !manifest.tags.length) throw new Error("manifest.json needs at least one Marketplace tag");
+if (!Array.isArray(manifest.authors) || !manifest.authors.length || !manifest.authors.every((author) => author?.name && author?.url?.startsWith("https://"))) {
+  throw new Error("manifest.json needs Marketplace author names and HTTPS profile URLs");
+}
 if (!source.includes("const render = () => h(Auraloom);")) throw new Error("index.js does not expose the Auraloom custom-app render entrypoint");
 
-console.log(`✓ ${manifest.name} manifest, Marketplace metadata and custom-app entrypoint are valid.`);
+console.log("✓ " + manifest.name + " manifest, Marketplace metadata and custom-app entrypoint are valid.");
