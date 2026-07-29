@@ -1,4 +1,4 @@
-{
+  "tags": ["visualizer{
   "name": "Auraloom",
   "description": "A visual scene studio for Spotify: build layered, audio-reactive scenes with a full editor, stage mode and Presentation Window.",
   "preview": "assets/editor.png",
@@ -9,5 +9,5 @@
   "subfiles": [],
   "subfiles_extension": [],
   "authors": [{ "name": "D1p1X" }],
-D1p1Xisualizer", "audio-reactive", "creative-tools", "lyrics", "presentation"]
+  "tags": ["visualizer", "audio-reactive", "creative-tools", "lyrics", "presentation"]
 }
