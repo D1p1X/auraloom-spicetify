@@ -1,7 +1,18 @@
 /* Auraloom — a local, Canva-like Spicetify visual studio. */
 const { React, ReactDOM } = Spicetify;
-const { useCallback, useEffect, useRef, useState } = React;
+const { useCallback, useEffect, useMemo, useRef, useState } = React;
 const h = React.createElement;
+
+function AuraloomMark({ title = "Auraloom" } = {}) {
+  return h("svg", { className: "hc-logo-mark", viewBox: "0 0 64 64", role: "img", "aria-label": title },
+    h("rect", { x: 2, y: 2, width: 60, height: 60, rx: 18, fill: "#0b0b0d" }),
+    h("rect", { x: 2.75, y: 2.75, width: 58.5, height: 58.5, rx: 17.25, fill: "none", stroke: "#f5f5f5", strokeOpacity: .28, strokeWidth: 1.5 }),
+    h("path", { d: "M13 39.5 22.5 18l8.1 15.2L37 21.8 51 39.5", fill: "none", stroke: "#f5f5f5", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: 4.5 }),
+    h("path", { d: "M16 45.5h32", fill: "none", stroke: "#f5f5f5", strokeLinecap: "round", strokeOpacity: .42, strokeWidth: 2 }),
+    h("circle", { cx: 22.5, cy: 18, r: 2.6, fill: "#f5f5f5" }),
+    h("circle", { cx: 37, cy: 21.8, r: 2.6, fill: "#f5f5f5" })
+  );
+}
 
 const STORAGE_KEY = "hudbacastum:project:v2";
 const PROJECT_LIBRARY_KEY = "hudbacastum:saved-projects:v1";
@@ -842,8 +853,17 @@ function useTrackSignal(playing, enabled, rhythm, gain = 100, smoothing = 8, lea
     if (!playing || !enabled || !rhythm.ready || !rhythm.frames.length) { setSignal((current) => current.energy || current.bass ? { bass: 0, mid: 0, high: 0, energy: 0, impact: 0, drop: 0, ready: rhythm.ready } : current); return undefined; }
     let previousBeat = -1;
     let animationFrame = 0;
-    let lastPaint = 0;
-    const qualityProfile = quality === "eco" ? { frameMs: 80, threshold: .012 } : quality === "high" ? { frameMs: 32, threshold: .004 } : { frameMs: 50, threshold: .007 };
+    let lastPaint = -Infinity;
+    // Keep the music signal on its own render island. Balanced now targets a
+    // true 30 fps and High targets the display refresh rate (up to 60 fps),
+    // while thresholds still prevent no-op React commits between analysis
+    // frames. This gives fluid motion without turning static editor controls
+    // into a 60 fps render workload.
+    const qualityProfile = quality === "eco"
+      ? { frameMs: 1000 / 12, threshold: .014 }
+      : quality === "high"
+        ? { frameMs: 1000 / 60, threshold: .0025 }
+        : { frameMs: 1000 / 30, threshold: .006 };
     const alpha = Number(smoothing) <= 0 ? 1 : clamp(1 - Number(smoothing) / 115, .12, .94);
     const multiplier = clamp(Number(gain || 100) / 100, .15, 2);
     const paint = (clock) => {
@@ -1094,7 +1114,7 @@ function ColourField({ label, value, onChange }) {
   );
 }
 
-function Widget({ layer, stackIndex = 0, selected, nowPlaying, playback, liveLyrics, motion, audioSignal, coverPalette, onSelect, onPointerDown, onPlayerAction, detached = false }) {
+const Widget = React.memo(function Widget({ layer, stackIndex = 0, selected, nowPlaying, playback, liveLyrics, motion, audioSignal, coverPalette, onSelect, onPointerDown, onPlayerAction, detached = false }) {
   const motionDuration = Math.max(0.2, motion / 70);
   const layerDuration = Math.max(.45, 3.4 - (layer.speed ?? 60) * .028);
   const input = layer.audioBand || "energy";
@@ -1430,7 +1450,92 @@ function Widget({ layer, stackIndex = 0, selected, nowPlaying, playback, liveLyr
     selected && !layer.locked && h("button", { className: "hc-resize-handle", title: "Resize", onPointerDown: (event) => onPointerDown(event, layer, "resize"), type: "button" }),
     selected && h("span", { className: "hc-layer-label" }, layer.label)
   );
-}
+});
+
+const IDLE_AUDIO_SIGNAL = Object.freeze({ bass: 0, mid: 0, high: 0, energy: 0, impact: 0, drop: 0, ready: false });
+
+// This component is intentionally isolated from the editor shell. The audio
+// signal can update at 60 fps without rebuilding the project library,
+// inspector, colour pickers or modal UI on every visual frame.
+const LiveScene = React.memo(function LiveScene({
+  project, nowPlaying, playback, liveLyrics, coverPalette, selectedId,
+  onSelect, onPointerDown, onPlayerAction, canvasRef, preview,
+  needsTrackAnalysis, trackRhythm, presentationTarget
+}) {
+  const audioSignal = useTrackSignal(nowPlaying.playing, needsTrackAnalysis, trackRhythm, project.audioGain, project.audioSmoothing, project.audioLeadMs, project.renderQuality || "balanced");
+  const stageOrder = useMemo(() => normalizeStageOrder(project), [project]);
+  const layersById = useMemo(() => new Map(project.layers.map((layer) => [layer.id, layer])), [project.layers]);
+  const effectConfigs = useMemo(() => normalizeEffects(project.effects), [project.effects]);
+  const backgroundSource = signalValue(audioSignal, project.backgroundAudioBand || "energy");
+  const backgroundAudioLevel = project.backgroundReactive && project.backgroundMode !== "black" ? clamp(backgroundSource * (Number(project.backgroundAudioStrength ?? 58) / 100), 0, 1) : 0;
+  const backgroundAudioZoom = clamp(Number(project.backgroundAudioZoom ?? 42) / 100, 0, 1);
+  const backgroundAudioLight = clamp(Number(project.backgroundAudioLight ?? 54) / 100, 0, 1);
+  const coverAdaptive = project.coverAdaptive !== false && project.backgroundMode !== "black" && Boolean(nowPlaying.art);
+  const coverAdaptiveAmount = clamp(Number(project.coverAdaptiveAmount ?? 62) / 100, 0, 1);
+  const coverAdaptivePalette = coverAdaptive && project.coverAdaptivePalette !== false;
+  const coverAdaptiveEffects = coverAdaptive && project.coverAdaptiveEffectColours !== false;
+  const showCanvasGrid = project.backgroundMode !== "black" && project.showGrid === true;
+  const canvasClass = `hc-canvas quality-${project.renderQuality || "balanced"} palette-${project.palette} texture-${project.texture} aspect-${project.aspect || "wide"} background-effect-${project.backgroundEffect || legacySceneEffect(project.scene)} ${showCanvasGrid ? "has-grid" : ""} ${project.backgroundReactive && project.backgroundMode !== "black" ? "is-background-reactive" : ""} ${coverAdaptive ? "is-cover-adaptive" : ""} ${preview ? "is-preview" : ""}`;
+  const colourMotion = clamp(audioSignal.energy * .52 + audioSignal.bass * .28 + audioSignal.high * .2, 0, 1);
+  const backgroundColourSource = project.backgroundColourSource || (project.autoPalette || coverAdaptivePalette ? "cover" : "manual");
+  const backgroundColours = resolveColourSet({ source: backgroundColourSource, count: project.backgroundColourCount ?? 3, manual: [project.bgPrimary, project.bgSecondary, project.bgTertiary], coverPalette, audioLevel: colourMotion });
+  const backgroundEffectColourSource = project.backgroundEffectColourSource || (coverAdaptiveEffects ? "cover" : "manual");
+  const backgroundEffectColours = resolveColourSet({ source: backgroundEffectColourSource, count: project.backgroundEffectColourCount ?? 2, manual: [project.backgroundEffectColor || "#ff956d", project.backgroundEffectColor2 || "#82ebe0"], coverPalette, audioLevel: colourMotion });
+  const [activePrimary, activeSecondary, activeTertiary] = backgroundColours;
+  const [effectPrimary, effectSecondary, effectTertiary] = backgroundEffectColours;
+  const adaptiveBackdrop = coverAdaptive && !["cover", "upload"].includes(project.backgroundMode) && ["ambient", "artwork"].includes(project.coverAdaptiveStyle || "ambient");
+  const backdropSource = project.backgroundMode === "cover" ? nowPlaying.art : project.backgroundMode === "upload" ? project.backgroundImage : adaptiveBackdrop ? nowPlaying.art : "";
+  const backdropOpacity = ["cover", "upload"].includes(project.backgroundMode) ? (project.backdropOpacity ?? 44) / 100 : project.coverAdaptiveStyle === "artwork" ? .18 + coverAdaptiveAmount * .58 : .08 + coverAdaptiveAmount * .32;
+  const backdropStyle = backdropSource ? {
+    backgroundImage: `url(${backdropSource})`, backgroundPosition: `${project.backdropX ?? 50}% ${project.backdropY ?? 50}%`, opacity: backdropOpacity,
+    transform: `scale(${((project.backdropScale ?? 108) / 100) * (1 + backgroundAudioLevel * backgroundAudioZoom * .18)})`,
+    filter: `blur(${adaptiveBackdrop ? Math.max(18, project.backdropBlur ?? 34) : project.backdropBlur ?? 34}px) saturate(${(adaptiveBackdrop ? 100 + coverAdaptiveAmount * 74 : project.backdropSaturation ?? 118)}%) brightness(${(adaptiveBackdrop ? 48 + coverAdaptiveAmount * 36 : project.backdropBrightness ?? 58) + backgroundAudioLevel * backgroundAudioLight * 42}%)`,
+    mixBlendMode: adaptiveBackdrop ? project.coverAdaptiveStyle === "artwork" ? "normal" : "soft-light" : undefined,
+    maskImage: adaptiveBackdrop && project.coverAdaptiveStyle === "artwork" ? "none" : undefined
+  } : null;
+  const focalCover = project.layers.find((layer) => layer.type === "cover" && !layer.hidden) || { x: 50, y: 45 };
+  const coverAuraStyle = project.coverAuraEnabled && nowPlaying.art ? {
+    backgroundImage: `url(${nowPlaying.art})`, backgroundPosition: `${focalCover.x ?? 50}% ${focalCover.y ?? 45}%`, backgroundSize: `${project.coverAuraScale ?? 72}% auto`,
+    opacity: clamp((project.coverAuraOpacity ?? 58) / 100 + backgroundAudioLevel * .14, 0, 1), transform: `scale(${1.08 + backgroundAudioLevel * backgroundAudioZoom * .11})`,
+    filter: `blur(${project.coverAuraBlur ?? 34}px) saturate(${project.coverAuraSaturation ?? 140}%) brightness(${(project.coverAuraBrightness ?? 106) + backgroundAudioLevel * backgroundAudioLight * 48}%)`,
+    mixBlendMode: project.coverAuraBlend || "screen", "--hc-cover-aura-tint": project.coverAuraTint || "#ffffff", "--hc-cover-aura-x": `${focalCover.x ?? 50}%`, "--hc-cover-aura-y": `${focalCover.y ?? 45}%`
+  } : null;
+  const canvasStyle = {
+    "--hc-density": project.density / 100, "--hc-motion-scale": project.motion / 100, "--hc-ambient": `${project.ambient ?? 62}px`, "--hc-vignette": (project.vignette ?? 42) / 100,
+    "--hc-grid-size": project.gridSize || 9, "--hc-grid-step": `${100 / (project.gridSize || 9)}%`, "--hc-bg-primary": activePrimary, "--hc-bg-secondary": activeSecondary, "--hc-bg-tertiary": activeTertiary, "--hc-bg-effect-1": effectPrimary, "--hc-bg-effect-2": effectSecondary, "--hc-bg-effect-3": effectTertiary, "--hc-backdrop-scale": (project.backdropScale ?? 108) / 100,
+    "--hc-bg-audio-level": backgroundAudioLevel.toFixed(3), "--hc-bg-audio-scale": (1 + backgroundAudioLevel * backgroundAudioZoom * .18).toFixed(3), "--hc-bg-audio-brightness": (1 + backgroundAudioLevel * backgroundAudioLight * .42).toFixed(3), "--hc-bg-audio-blur": `${Math.round(backgroundAudioLevel * backgroundAudioZoom * 7)}px`, "--hc-bg-effect-opacity": (project.backgroundReactive ? .52 + backgroundAudioLevel * .48 : 1).toFixed(3), "--hc-bg-pulse-opacity": (backgroundAudioLevel * (.06 + backgroundAudioLight * .24)).toFixed(3),
+    "--hc-bg-react-turn": `${Math.round((audioSignal.impact || 0) * 38 + (audioSignal.high || 0) * 18)}deg`, "--hc-bg-react-shift-x": `${Math.round(((audioSignal.high || 0) - (audioSignal.bass || 0)) * 18)}px`, "--hc-bg-react-shift-y": `${Math.round(-backgroundAudioLevel * 24)}px`, "--hc-bg-react-position": `${Math.round(backgroundAudioLevel * 76)}px`
+  };
+  if (project.sceneAccent) canvasStyle["--hc-accent"] = project.sceneAccent;
+  if (project.sceneSignal) canvasStyle["--hc-accent-2"] = project.sceneSignal;
+  const effectStyle = (config) => {
+    const source = signalValue(audioSignal, config.band || "off");
+    const live = config.band === "off" ? 0 : clamp(source * (.55 + (config.sensitivity ?? 60) / 100 * 1.45), 0, 1);
+    const amount = clamp(Number(config.intensity ?? 58) / 100, 0, 1);
+    const colours = resolveColourSet({ source: config.colourSource || (coverAdaptiveEffects ? "cover" : "manual"), count: config.colourCount ?? 2, manual: [config.color || "#ffffff", config.color2 || "#ffffff"], coverPalette, audioLevel: live });
+    return { "--hc-fx-1": colours[0], "--hc-fx-2": colours[1], "--hc-fx-3": colours[2], "--hc-fx-opacity": (.02 + amount * .4 + live * .16).toFixed(3), "--hc-fx-opacity-soft": (.015 + amount * .27 + live * .1).toFixed(3), "--hc-fx-scale-live": (1 + live * (.03 + amount * .08)).toFixed(3), "--hc-fx-brightness": (1 + live * (.16 + amount * .44)).toFixed(3), "--hc-fx-turn": `${Math.round(live * (22 + amount * 34))}deg`, "--hc-fx-shift-x": `${Math.round(live * 19)}px`, "--hc-fx-shift-y": `${Math.round(-live * 13)}px`, mixBlendMode: config.blend || "screen" };
+  };
+  const renderStageItem = (key, index, detached = false) => {
+    const zIndex = 100 + index * 100;
+    if (key === STAGE_BACKGROUND_EFFECT) return h("div", { key, className: "hc-scene-stage-item hc-scene-stage-item--background", style: { zIndex } }, project.backgroundReactive && project.backgroundMode !== "black" && h("div", { className: "hc-background-pulse" }), project.backgroundEffect && project.backgroundEffect !== "none" && h("div", { className: `hc-background-effect hc-background-effect--${project.backgroundEffect}`, style: { opacity: canvasStyle["--hc-bg-effect-opacity"] } }));
+    if (key === STAGE_COVER_AURA) return coverAuraStyle && h("div", { key, className: "hc-cover-aura", style: { ...coverAuraStyle, zIndex } });
+    if (key === STAGE_VIGNETTE) return Number(project.vignette || 0) > 0 && h("div", { key, className: "hc-canvas-vignette", style: { zIndex } });
+    const effectId = stageEffectId(key);
+    if (effectId) {
+      const config = effectConfigs[effectId];
+      return config?.enabled && h("div", { key, className: `hc-fx hc-fx-${effectId} ${config.band !== "off" && signalValue(audioSignal, config.band) > .03 ? "is-audio-live" : ""}`, style: { ...effectStyle(config), zIndex } });
+    }
+    const layer = layersById.get(stageLayerId(key));
+    const layerSignal = (layer?.audioBand || "energy") === "off" ? IDLE_AUDIO_SIGNAL : audioSignal;
+    return layer && h(Widget, { key: layer.id, layer, stackIndex: index, selected: !detached && layer.id === selectedId, nowPlaying, playback, liveLyrics, motion: project.motion, audioSignal: layerSignal, coverPalette, onSelect, onPointerDown, onPlayerAction, detached });
+  };
+  const renderCanvas = (detached = false) => h("div", {
+    ref: detached ? undefined : canvasRef, className: `${canvasClass} background-${project.backgroundMode || "cover"} ${detached ? "hc-canvas--detached" : ""}`,
+    onClick: detached ? undefined : () => onSelect(null), style: canvasStyle
+  }, h("div", { className: "hc-canvas-noise" }), backdropStyle && h("div", { className: `hc-cover-backdrop ${adaptiveBackdrop ? "is-cover-adaptive" : ""}`, style: backdropStyle }), stageOrder.map((key, index) => renderStageItem(key, index, detached)));
+  const presentation = presentationTarget && ReactDOM?.createPortal ? ReactDOM.createPortal(h("div", { className: "hc-present-root" }, renderCanvas(true)), presentationTarget) : null;
+  return presentation ? h(React.Fragment, null, renderCanvas(false), presentation) : renderCanvas(false);
+});
 
 function Auraloom() {
   const [project, setProject] = useState(readProject);
@@ -1480,7 +1585,10 @@ function Auraloom() {
   const liveLyrics = useLiveLyrics(nowPlaying, hasLiveLyrics);
   const coverPalette = useCoverPalette(usesCoverColours ? nowPlaying.art : "");
   const trackRhythm = useTrackRhythm(nowPlaying.uri, needsTrackAnalysis);
-  const audioSignal = useTrackSignal(nowPlaying.playing, needsTrackAnalysis, trackRhythm, project.audioGain, project.audioSmoothing, project.audioLeadMs, project.renderQuality || "balanced");
+  // Audio state lives inside LiveScene so the complete editor is not rebuilt
+  // for every music frame. Keep this idle shape only for non-canvas editor
+  // metadata and backwards-compatible helper calculations below.
+  const audioSignal = IDLE_AUDIO_SIGNAL;
   const selected = project.layers.find((layer) => layer.id === selectedId) || null;
   const selectedEffect = project.effects?.[selectedEffectId] || normalizeEffects()[selectedEffectId];
 
@@ -1624,7 +1732,7 @@ function Auraloom() {
     setCinema(true);
     setFullscreen(true);
   };
-  const onPlayerAction = (action, value) => {
+  const onPlayerAction = useCallback((action, value) => {
     try {
       const player = Spicetify.Player;
       if (!player) throw new Error("Player unavailable");
@@ -1636,7 +1744,7 @@ function Auraloom() {
       if (action === "seek" && Number.isFinite(value)) player.seek?.(value);
       if (action === "volume" && Number.isFinite(value)) player.setVolume?.(clamp(value, 0, 1));
     } catch (_) { Spicetify.showNotification("Spotify playback control is not available yet", true); }
-  };
+  }, []);
   const openPresentWindow = async () => {
     // The child is rendered through a React portal from the already-working
     // Spotify root.  Do not create a second React root in the new document:
@@ -1843,7 +1951,7 @@ function Auraloom() {
       Spicetify.showNotification("Auraloom project loaded", false);
     } catch (_) { Spicetify.showNotification("That JSON is not an Auraloom project", true); }
   };
-  const onPointerDown = (event, layer, mode) => {
+  const onPointerDown = useCallback((event, layer, mode) => {
     if (layer.locked) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1851,13 +1959,17 @@ function Auraloom() {
     if (!rect) return;
     setSelectedId(layer.id);
     setInteraction({ id: layer.id, mode, rect, startX: event.clientX, startY: event.clientY, layer: { ...layer }, before: projectRef.current });
-  };
+  }, []);
   useEffect(() => {
     if (!interaction) return undefined;
-    const move = (event) => {
-      const dx = ((event.clientX - interaction.startX) / interaction.rect.width) * 100;
-      const dy = ((event.clientY - interaction.startY) / interaction.rect.height) * 100;
-      const bypassGuides = event.altKey;
+    let animationFrame = 0;
+    let latestPoint = null;
+    const applyMove = () => {
+      animationFrame = 0;
+      if (!latestPoint) return;
+      const dx = ((latestPoint.x - interaction.startX) / interaction.rect.width) * 100;
+      const dy = ((latestPoint.y - interaction.startY) / interaction.rect.height) * 100;
+      const bypassGuides = latestPoint.bypassGuides;
       const snap = projectRef.current.grid ? 1 : 0.1;
       const snapped = (value) => Math.round(value / snap) * snap;
       setProject((current) => {
@@ -1877,21 +1989,27 @@ function Auraloom() {
           // making a free placement feel like it is fighting the pointer.
           return closest.distance <= 1.25 ? closest.value : clean;
         };
-        return {
-          ...current,
-          layers: current.layers.map((layer) => {
-            if (layer.id !== interaction.id) return layer;
-            if (interaction.mode === "resize") return { ...layer, w: snapped(clamp(interaction.layer.w + dx, 10, 300)) };
-            return {
-              ...layer,
-              x: magnetic(clamp(interaction.layer.x + dx, 4, 96), "x"),
-              y: magnetic(clamp(interaction.layer.y + dy, 5, 95), "y")
-            };
-          })
-        };
+        const next = interaction.mode === "resize"
+          ? { ...interaction.layer, w: snapped(clamp(interaction.layer.w + dx, 10, 300)) }
+          : { ...interaction.layer, x: magnetic(clamp(interaction.layer.x + dx, 4, 96), "x"), y: magnetic(clamp(interaction.layer.y + dy, 5, 95), "y") };
+        const currentLayer = current.layers.find((layer) => layer.id === interaction.id);
+        if (!currentLayer || (currentLayer.x === next.x && currentLayer.y === next.y && currentLayer.w === next.w)) return current;
+        return { ...current, layers: current.layers.map((layer) => layer.id === interaction.id ? { ...layer, ...next } : layer) };
       });
     };
+    // Pointer hardware can report well above the monitor refresh rate. Batch
+    // it to one state update per painted frame so dragging stays responsive
+    // without starving the live scene renderer.
+    const move = (event) => {
+      latestPoint = { x: event.clientX, y: event.clientY, bypassGuides: event.altKey };
+      if (!animationFrame) animationFrame = window.requestAnimationFrame(applyMove);
+    };
     const up = () => {
+      if (animationFrame) {
+        window.cancelAnimationFrame(animationFrame);
+        animationFrame = 0;
+        applyMove();
+      }
       setPast((stack) => [...stack.slice(-24), interaction.before]);
       setFuture([]);
       setIsDirty(true);
@@ -1899,7 +2017,7 @@ function Auraloom() {
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up, { once: true });
-    return () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    return () => { window.cancelAnimationFrame(animationFrame); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
   }, [interaction]);
   const copyProject = async () => {
     const payload = JSON.stringify(project, null, 2);
@@ -2115,7 +2233,7 @@ function Auraloom() {
       h(Field, { label: "Signal smoothing", value: project.audioSmoothing ?? 8, min: 0, max: 100, onChange: (audioSmoothing) => patchProject({ audioSmoothing }) }),
       h(Field, { label: "Timing offset", value: project.audioLeadMs ?? 0, min: -150, max: 250, unit: "ms", onChange: (audioLeadMs) => patchProject({ audioLeadMs }) }),
       h("div", { className: "hc-signal-readout" }, [["Bass", audioSignal.bass], ["Mid", audioSignal.mid], ["High", audioSignal.high], ["Drop", audioSignal.drop]].map(([label, value]) => h("span", { key: label }, h("i", { style: { width: `${Math.round(value * 100)}%` } }), h("b", null, label)))),
-      h("p", { className: "hc-reactive-note" }, project.reactive ? trackRhythm.ready ? `${trackRhythm.cached ? "Offline-ready cached analysis" : "Live track analysis"}: bass, mids, highs and impact are time-aligned to ${trackRhythm.frames.length} audio segments. ${project.renderQuality === "eco" ? "Eco samples at 12fps for longer sessions." : project.renderQuality === "high" ? "High samples at 31fps for the quickest response." : "Balanced samples at 20fps for smooth, efficient playback."}` : "Analysis starts only when the scene contains an active reactive layer or effect. Once cached, downloaded playback keeps using this local analysis." : "Audio reactions are paused.")
+      h("p", { className: "hc-reactive-note" }, project.reactive ? trackRhythm.ready ? `${trackRhythm.cached ? "Offline-ready cached analysis" : "Live track analysis"}: bass, mids, highs and impact are time-aligned to ${trackRhythm.frames.length} audio segments. ${project.renderQuality === "eco" ? "Eco samples at 12fps for longer sessions." : project.renderQuality === "high" ? "High samples at up to 60fps for the quickest response." : "Balanced samples at 30fps for smooth, efficient playback."}` : "Analysis starts only when the scene contains an active reactive layer or effect. Once cached, downloaded playback keeps using this local analysis." : "Audio reactions are paused.")
     ),
     h("div", { className: "hc-mini-section hc-effects-section" },
       h("span", { className: "hc-section-label" }, "Finishing effects"),
@@ -2343,7 +2461,7 @@ function Auraloom() {
       h("header", { className: "hc-topbar" },
         h("div", { className: "hc-leading-rail" },
           h("button", { className: `hc-fullscreen-btn hc-fullscreen-btn--leading ${fullscreen ? "is-active" : ""}`, title: "Fullscreen editor (Ctrl/Cmd + Shift + F)", onClick: toggleFullscreen, type: "button" }, fullscreen ? "Exit editor" : "Fullscreen editor"),
-          h("div", { className: "hc-brand" }, h("div", null, h("b", null, "Auraloom"), h("small", null, "Visual scene studio")))
+          h("div", { className: "hc-brand" }, h("div", { className: "hc-logo" }, h(AuraloomMark)), h("div", null, h("b", null, "Auraloom"), h("small", null, "Visual scene studio")))
         ),
         h("div", { className: "hc-project-rail", "aria-label": "Scene library" },
           h("label", { className: "hc-project-name" }, h("span", null, "Scene"), h("input", { value: project.name, onChange: (event) => patchProject({ name: event.target.value }) })),
@@ -2365,8 +2483,8 @@ function Auraloom() {
       ),
       h("section", { className: "hc-workspace" }, palettePanel,
         h("section", { className: "hc-stage-wrap" },
-          h("div", { className: "hc-stage-meta" }, h("span", null, "LIVE CANVAS"), h("b", null, nowPlaying.playing ? `● ${trackRhythm.ready ? trackRhythm.cached ? "CACHED TRACK ANALYSIS" : "LIVE TRACK ANALYSIS" : "ANALYZING TRACK"} · BASS ${Math.round(audioSignal.bass * 100)}%` : "○ Waiting for music")),
-          h("div", { className: `hc-canvas-shell aspect-${project.aspect || "wide"}`, style: { "--hc-zoom": project.zoom / 100 } }, renderCanvas()),
+          h("div", { className: "hc-stage-meta" }, h("span", null, "LIVE CANVAS"), h("b", null, nowPlaying.playing ? `● ${trackRhythm.ready ? trackRhythm.cached ? "CACHED TRACK ANALYSIS" : "LIVE TRACK ANALYSIS" : "ANALYZING TRACK"} · ${project.renderQuality === "high" ? "UP TO 60 FPS" : project.renderQuality === "eco" ? "12 FPS ECO" : "30 FPS BALANCED"}` : "○ Waiting for music")),
+          h("div", { className: `hc-canvas-shell aspect-${project.aspect || "wide"}`, style: { "--hc-zoom": project.zoom / 100 } }, h(LiveScene, { project, nowPlaying, playback, liveLyrics, coverPalette, selectedId, onSelect: setSelectedId, onPointerDown, onPlayerAction, canvasRef, preview, needsTrackAnalysis, trackRhythm, presentationTarget })),
           h("div", { className: "hc-stage-tip" }, h("span", null, "↖"), "Drag any block. Pull the corner dot to resize. Press ⌘Z to undo.")
         ), inspector
       ),
@@ -2390,10 +2508,7 @@ function Auraloom() {
   // fullscreen editor is portalled to document.body. This makes the icon open
   // a clean full-window editor even when Chromium refuses native fullscreen.
   const editorRoot = fullscreen && ReactDOM?.createPortal ? ReactDOM.createPortal(editor, document.body) : editor;
-  const presentationRoot = presentationTarget && ReactDOM?.createPortal
-    ? ReactDOM.createPortal(h("div", { className: "hc-present-root" }, renderCanvas(true)), presentationTarget)
-    : null;
-  return presentationRoot ? h(React.Fragment, null, editorRoot, presentationRoot) : editorRoot;
+  return editorRoot;
 }
 
 const render = () => h(Auraloom);

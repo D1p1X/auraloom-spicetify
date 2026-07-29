@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/auraloom-mark.svg" width="96" alt="Auraloom logo">
+
 # Auraloom
 
 ### Build a visual world for the music already playing in Spotify.
@@ -11,6 +13,8 @@
 </div>
 
 ![Auraloom editor](assets/editor.png)
+
+![Auraloom fullscreen stage](assets/stage-fullscreen.png)
 
 > Unofficial, desktop-only software. Auraloom runs inside Spicetify, which modifies the Spotify desktop client and may be affected by Spotify updates. It is not affiliated with Spotify or any music artist.
 
@@ -24,7 +28,7 @@ The interface is deliberately calm: a block library on the left, a live canvas i
 
 ![Auraloom Presentation Window demo](assets/auraloom-demo.gif)
 
-This capture is a silent ten-second local Spotify session. It shows the real Presentation Window canvas; the displayed track artwork and lyric excerpt remain the property of their respective rightsholders. Replace the demo media before redistributing the repository if you do not hold permission to publish it.
+This is a silent ten-second local Spotify capture of the real fullscreen canvas: album art, playback controls and spectrum are rendered by Auraloom. The displayed artwork remains the property of its respective rightsholders. Replace demo media before redistributing the repository if you do not hold permission to publish it.
 
 ## Designed for scenes, not presets alone
 
@@ -49,24 +53,30 @@ Each layer can be static or can listen to Bass, Mids, Highs, Track energy, Beat 
 For long sessions, the **Track analysis → Performance** control provides three rendering profiles:
 
 - **Eco** — 12fps signal updates and a larger visual-change threshold for lower CPU use.
-- **Balanced** — 20fps signal updates; recommended for normal editing and presentation.
-- **High** — up to 31fps signal updates for the fastest compatible response.
+- **Balanced** — 30fps signal updates; recommended for normal editing and presentation.
+- **High** — up to 60fps signal updates for the fastest compatible response. The live canvas is isolated from the editor UI, so colour pickers, panels and project controls do not re-render for every music frame.
 
 Static scenes do not fetch Spotify analysis. Auraloom also skips lyric-provider requests unless a visible Adaptive lyrics block exists, pauses its animation loop while the document is hidden and avoids attaching keyboard listeners on every audio frame.
 
 ## Installation
 
-### One command from this repository
+### Recommended: one command from this repository
 
-Prerequisites: Spotify Desktop, [Spicetify](https://spicetify.app/), and Node.js 18 or newer.
+You need Spotify Desktop, [Spicetify](https://spicetify.app/) and Node.js 18 or newer. First confirm that Spicetify is available in your terminal:
 
 ```sh
-git clone https://github.com/YOUR-ACCOUNT/auraloom-spicetify.git
+spicetify --version
+```
+
+Then clone the public project and run the cross-platform installer. The same commands work in macOS Terminal, Linux Terminal and Windows PowerShell.
+
+```sh
+git clone https://github.com/D1p1X/auraloom-spicetify.git
 cd auraloom-spicetify
 npm run install:local
 ```
 
-The installer copies Auraloom to the correct CustomApps directory for the current operating system, enables `hudbacastum` in Spicetify and runs `spicetify apply`. Restart Spotify, then select **Auraloom** from the top-left Custom Apps rail.
+The installer detects the operating system, copies the application files to the correct `CustomApps/hudbacastum` folder, enables the app in Spicetify and runs `spicetify apply`. Restart Spotify, then select the Auraloom waveform logo in the Custom Apps rail.
 
 ### Manual install
 
@@ -87,9 +97,16 @@ spicetify apply
 
 The folder name must remain `hudbacastum`: it is the internal Custom App route that Spotify/Spicetify registers. The visible product name is **Auraloom**.
 
+### If Auraloom does not appear in Spotify
+
+1. Fully quit Spotify, including its system-tray/menu-bar process, then open it again.
+2. Run `spicetify config custom_apps hudbacastum` and `spicetify apply` one more time.
+3. Confirm the files are directly inside `CustomApps/hudbacastum/` — not inside an extra ZIP or repository folder.
+4. After a Spotify update, re-run `spicetify apply`. Spotify updates can replace files modified by Spicetify.
+
 ### Marketplace
 
-Once this public repository has the `spicetify-apps` GitHub topic, the included Marketplace manifest enables discovery in Spicetify Marketplace. Marketplace Custom Apps still need the normal `spicetify apply` step after installation. See [the publication checklist](docs/MARKETPLACE.md) for the exact repository requirements.
+This repository is public, carries the `spicetify-apps` GitHub topic and contains the Marketplace metadata, preview and README reference required for discovery. Marketplace indexing is asynchronous, so an entry can take time to appear after a change. Marketplace Custom Apps still need the normal `spicetify apply` step after installation. See [the publication checklist](docs/MARKETPLACE.md) for the exact repository requirements.
 
 ## First scene in sixty seconds
 
@@ -129,6 +146,10 @@ npm run install:local  # copies to Spicetify and applies it locally
 ```
 
 The GitHub Actions workflow runs `npm run check` on every push and pull request.
+
+## License
+
+Auraloom uses the [MIT License](LICENSE). It is intentionally simple: you may use, modify and redistribute the source, including in personal visual projects, as long as the license notice is retained. It fits a small open-source Spicetify Custom App without adding legal friction.
 
 ## Credits
 
