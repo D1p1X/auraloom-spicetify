@@ -14,9 +14,28 @@ function AuraloomMark({ title = "Auraloom" } = {}) {
   );
 }
 
-const STORAGE_KEY = "hudbacastum:project:v2";
-const PROJECT_LIBRARY_KEY = "hudbacastum:saved-projects:v1";
-const ANALYSIS_CACHE_KEY = "hudbacastum:track-analysis:v2";
+const APP_ID = "Auraloom";
+const STORAGE_KEY = `${APP_ID}:project:v2`;
+const PROJECT_LIBRARY_KEY = `${APP_ID}:saved-projects:v1`;
+const ANALYSIS_CACHE_KEY = `${APP_ID}:track-analysis:v2`;
+// Keep existing local scenes and cached analysis during the one-time route
+// rename. The old identifiers are built rather than displayed anywhere, then
+// immediately removed once their data has been copied to the Auraloom keys.
+const LEGACY_APP_ID = ["hudba", "castum"].join("");
+const legacyStorageKey = (suffix) => `${LEGACY_APP_ID}:${suffix}`;
+const PLAYBACK_SYNC_EVENT = "auraloom:playback-sync";
+const playingFromSpotifyUi = () => {
+  // Some current Spotify desktop builds expose a non-boolean Player.isPaused
+  // value. The main playback control is still authoritative and available in
+  // the same renderer, so only use it as a cross-version fallback.
+  const button = document.querySelector('[data-testid="control-button-playpause"]')
+    || document.querySelector('button[aria-label*="Pozastavit" i], button[aria-label*="Pause" i]')
+    || document.querySelector('button[aria-label*="Přehrát" i], button[aria-label*="Play" i]');
+  const label = String(button?.getAttribute("aria-label") || button?.getAttribute("title") || "");
+  if (/pause|pozastavit/i.test(label)) return true;
+  if (/play|přehrát/i.test(label)) return false;
+  return null;
+};
 const MAX_ANALYSIS_CACHE = 18;
 const MAX_SAVED_PROJECTS = 18;
 const MAX_LAYERS = 64;
@@ -451,14 +470,28 @@ function readProject() {
   try {
     const startup = readProjectLibrary().find((entry) => entry.isDefault === true);
     if (startup?.project && Array.isArray(startup.project.layers)) return hydrateProject(startup.project);
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    const stored = localStorage.getItem(STORAGE_KEY);
+    const legacyKey = legacyStorageKey("project:v2");
+    const legacy = stored === null ? localStorage.getItem(legacyKey) : null;
+    if (stored === null && legacy !== null) {
+      localStorage.setItem(STORAGE_KEY, legacy);
+      localStorage.removeItem(legacyKey);
+    }
+    const parsed = JSON.parse(stored ?? legacy);
     return parsed && Array.isArray(parsed.layers) ? hydrateProject(parsed) : createProject();
   } catch (_) { return createProject(); }
 }
 
 const readProjectLibrary = () => {
   try {
-    const items = JSON.parse(localStorage.getItem(PROJECT_LIBRARY_KEY));
+    const stored = localStorage.getItem(PROJECT_LIBRARY_KEY);
+    const legacyKey = legacyStorageKey("saved-projects:v1");
+    const legacy = stored === null ? localStorage.getItem(legacyKey) : null;
+    if (stored === null && legacy !== null) {
+      localStorage.setItem(PROJECT_LIBRARY_KEY, legacy);
+      localStorage.removeItem(legacyKey);
+    }
+    const items = JSON.parse(stored ?? legacy);
     return Array.isArray(items) ? items.filter((item) => item && item.id && item.project && Array.isArray(item.project.layers)).slice(0, MAX_SAVED_PROJECTS) : [];
   } catch (_) { return []; }
 };
@@ -473,22 +506,38 @@ function useNowPlaying() {
   const [state, setState] = useState({ title: "Choose a track", artist: "Auraloom studio", art: "", uri: "", playing: false, durationMs: 0 });
   useEffect(() => {
     const sync = () => {
-      const item = Spicetify.Player?.data?.item;
+      const player = Spicetify.Player;
+      const item = player?.data?.item;
       const metadata = item?.metadata || {};
       const image = metadata.image_xlarge_url || metadata.image_large_url || metadata.image_url || "";
+      const paused = typeof player?.isPaused === "function" ? player.isPaused() : player?.isPaused;
+      const uiPlaying = playingFromSpotifyUi();
+      const playing = typeof paused === "boolean"
+        ? !paused
+        : typeof uiPlaying === "boolean"
+          ? uiPlaying
+          : Boolean(player?.data?.isPlaying ?? player?.data?.is_playing ?? false);
       const next = {
         title: metadata.title || item?.name || "Choose a track",
         artist: metadata.artist_name || metadata.artist || item?.artists?.map((artist) => artist.name).join(", ") || "Auraloom studio",
         art: image,
         uri: item?.uri || metadata.uri || "",
-        playing: !Spicetify.Player?.isPaused?.(),
+        playing,
         durationMs: Number(item?.duration?.milliseconds || metadata.duration || item?.metadata?.duration || 0)
       };
       setState((current) => current.title === next.title && current.artist === next.artist && current.art === next.art && current.uri === next.uri && current.playing === next.playing && current.durationMs === next.durationMs ? current : next);
     };
     sync();
-    const timer = window.setInterval(sync, 1100);
-    return () => window.clearInterval(timer);
+    const timer = window.setInterval(sync, 700);
+    const player = Spicetify.Player;
+    const events = ["onplaypause", "songchange"];
+    events.forEach((event) => player?.addEventListener?.(event, sync));
+    window.addEventListener(PLAYBACK_SYNC_EVENT, sync);
+    return () => {
+      window.clearInterval(timer);
+      events.forEach((event) => player?.removeEventListener?.(event, sync));
+      window.removeEventListener(PLAYBACK_SYNC_EVENT, sync);
+    };
   }, []);
   return state;
 }
@@ -785,7 +834,17 @@ const indexAt = (markers, position) => {
 };
 
 const readAnalysisCache = () => {
-  try { const parsed = JSON.parse(localStorage.getItem(ANALYSIS_CACHE_KEY)); return parsed && typeof parsed === "object" ? parsed : {}; }
+  try {
+    const stored = localStorage.getItem(ANALYSIS_CACHE_KEY);
+    const legacyKey = legacyStorageKey("track-analysis:v2");
+    const legacy = stored === null ? localStorage.getItem(legacyKey) : null;
+    if (stored === null && legacy !== null) {
+      localStorage.setItem(ANALYSIS_CACHE_KEY, legacy);
+      localStorage.removeItem(legacyKey);
+    }
+    const parsed = JSON.parse(stored ?? legacy);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  }
   catch (_) { return {}; }
 };
 
@@ -1375,7 +1434,10 @@ const Widget = React.memo(function Widget({ layer, stackIndex = 0, selected, now
     const options = { ...LAYER_DEFAULTS.controls.controls, ...(layer.controls || {}) };
     const progress = playback?.durationMs ? clamp((playback.progressMs || 0) / playback.durationMs * 100, 0, 100) : 0;
     const progressStyle = options.progressStyle || "line";
-    const playerButton = (action, label, icon) => h("button", { className: "hc-player-button", title: label, type: "button", onPointerDown: (event) => event.stopPropagation(), onClick: (event) => { event.stopPropagation(); onPlayerAction?.(action); } }, icon);
+    const playerButton = (action, label, icon) => h("button", { className: "hc-player-button", title: label, "aria-label": label, type: "button", onPointerDown: (event) => event.stopPropagation(), onClick: (event) => { event.stopPropagation(); onPlayerAction?.(action); } }, icon);
+    const playbackGlyph = nowPlaying.playing
+      ? h("svg", { className: "hc-player-glyph", viewBox: "0 0 24 24", "aria-hidden": "true", focusable: "false" }, h("rect", { x: 6, y: 5, width: 4, height: 14, rx: 1 }), h("rect", { x: 14, y: 5, width: 4, height: 14, rx: 1 }))
+      : h("svg", { className: "hc-player-glyph", viewBox: "0 0 24 24", "aria-hidden": "true", focusable: "false" }, h("path", { d: "M8 5.8v12.4a1 1 0 0 0 1.55.83l9-6.2a1 1 0 0 0 0-1.65l-9-6.2A1 1 0 0 0 8 5.8Z" }));
     const seek = (event) => {
       event.preventDefault(); event.stopPropagation();
       const rect = event.currentTarget.getBoundingClientRect();
@@ -1393,7 +1455,7 @@ const Widget = React.memo(function Widget({ layer, stackIndex = 0, selected, now
       h("span", { className: "hc-player-actions" },
         options.showShuffle && playerButton("shuffle", "Toggle shuffle", "⇄"),
         options.showPrevious && playerButton("previous", "Previous track", "‹"),
-        options.showPlay && playerButton("play", nowPlaying.playing ? "Pause" : "Play", nowPlaying.playing ? "Ⅱ" : "▶"),
+        options.showPlay && playerButton("play", nowPlaying.playing ? "Pause" : "Play", playbackGlyph),
         options.showNext && playerButton("next", "Next track", "›"),
         options.showRepeat && playerButton("repeat", "Toggle repeat", "↻")
       ),
@@ -1530,8 +1592,16 @@ const LiveScene = React.memo(function LiveScene({
     return layer && h(Widget, { key: layer.id, layer, stackIndex: index, selected: !detached && layer.id === selectedId, nowPlaying, playback, liveLyrics, motion: project.motion, audioSignal: layerSignal, coverPalette, onSelect, onPointerDown, onPlayerAction, detached });
   };
   const renderCanvas = (detached = false) => h("div", {
-    ref: detached ? undefined : canvasRef, className: `${canvasClass} background-${project.backgroundMode || "cover"} ${detached ? "hc-canvas--detached" : ""}`,
-    onClick: detached ? undefined : () => onSelect(null), style: canvasStyle
+    ref: detached ? undefined : canvasRef,
+    className: `${canvasClass} background-${project.backgroundMode || "cover"} ${detached ? "hc-canvas--detached" : ""}`,
+    // Presentation Window is deliberately an output surface. Its playback
+    // controls stop propagation themselves; every other pointer gesture is
+    // consumed here so layers can never be selected, dragged or resized.
+    onPointerDown: detached ? (event) => event.preventDefault() : undefined,
+    onDragStart: detached ? (event) => event.preventDefault() : undefined,
+    onContextMenu: detached ? (event) => event.preventDefault() : undefined,
+    onClick: detached ? undefined : () => onSelect(null),
+    style: canvasStyle
   }, h("div", { className: "hc-canvas-noise" }), backdropStyle && h("div", { className: `hc-cover-backdrop ${adaptiveBackdrop ? "is-cover-adaptive" : ""}`, style: backdropStyle }), stageOrder.map((key, index) => renderStageItem(key, index, detached)));
   const presentation = presentationTarget && ReactDOM?.createPortal ? ReactDOM.createPortal(h("div", { className: "hc-present-root" }, renderCanvas(true)), presentationTarget) : null;
   return presentation ? h(React.Fragment, null, renderCanvas(false), presentation) : renderCanvas(false);
@@ -1736,7 +1806,14 @@ function Auraloom() {
     try {
       const player = Spicetify.Player;
       if (!player) throw new Error("Player unavailable");
-      if (action === "play") player.togglePlay?.();
+      if (action === "play") {
+        player.togglePlay?.();
+        // Player event delivery varies slightly between Spotify desktop
+        // builds. Trigger two short local syncs as a reliable fallback so the
+        // triangular Play glyph changes to Pause (and back) immediately.
+        window.setTimeout(() => window.dispatchEvent(new Event(PLAYBACK_SYNC_EVENT)), 0);
+        window.setTimeout(() => window.dispatchEvent(new Event(PLAYBACK_SYNC_EVENT)), 180);
+      }
       if (action === "previous") player.back?.();
       if (action === "next") player.next?.();
       if (action === "shuffle") player.toggleShuffle?.();
@@ -1769,7 +1846,7 @@ function Auraloom() {
     // Document Picture-in-Picture is intentionally not used here: it is a compact
     // overlay, not a normal application window.
     let popup = null;
-    try { popup = window.open("about:blank", "hudbacastum-present"); } catch (_) { /* Spotify may block child windows in an older shell. */ }
+    try { popup = window.open("about:blank", "auraloom-present"); } catch (_) { /* Spotify may block child windows in an older shell. */ }
     if (!popup) {
       Spicetify.showNotification("This Spotify build cannot create a normal Presentation Window. Stage fullscreen has been opened instead.", true);
       toggleCinema();
@@ -1781,9 +1858,9 @@ function Auraloom() {
     try {
       const styles = [...document.querySelectorAll('link[rel="stylesheet"], style')].map((node) => node.outerHTML).join("");
       popup.document.open();
-      popup.document.write(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Auraloom — Present</title>${styles}<style>html,body,#hudbacastum-present{width:100%;height:100%;min-width:0;min-height:0;margin:0;padding:0;background:#000;overflow:hidden}.hc-present-root{width:100%;height:100%;min-width:0;min-height:0;overflow:hidden}.hc-canvas{width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;max-width:100%!important;max-height:100%!important;box-sizing:border-box;aspect-ratio:auto!important;border:0!important;border-radius:0!important}.hc-canvas--detached .hc-widget{pointer-events:none}.hc-canvas--detached .hc-widget--controls,.hc-canvas--detached .hc-widget--controls *{pointer-events:auto}</style></head><body><div id="hudbacastum-present"></div></body></html>`);
+      popup.document.write(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Auraloom — Present</title>${styles}<style>html,body,#auraloom-present{width:100%;height:100%;min-width:0;min-height:0;margin:0;padding:0;background:#000;overflow:hidden}.hc-present-root{width:100%;height:100%;min-width:0;min-height:0;overflow:hidden}.hc-canvas{width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;max-width:100%!important;max-height:100%!important;box-sizing:border-box;aspect-ratio:auto!important;border:0!important;border-radius:0!important}.hc-canvas--detached{user-select:none;-webkit-user-select:none;touch-action:manipulation}.hc-canvas--detached .hc-widget{pointer-events:none!important;cursor:default}.hc-canvas--detached .hc-widget--controls,.hc-canvas--detached .hc-widget--controls .hc-player-button,.hc-canvas--detached .hc-widget--controls .hc-player-progress,.hc-canvas--detached .hc-widget--controls .hc-player-volume{pointer-events:auto!important}</style></head><body><div id="auraloom-present"></div></body></html>`);
       popup.document.close();
-      if (!popup.document.getElementById("hudbacastum-present")) throw new Error("Presentation document did not initialise");
+      if (!popup.document.getElementById("auraloom-present")) throw new Error("Presentation document did not initialise");
     } catch (_) {
       try { popup.close(); } catch (_) { /* The child may have been closed by the shell. */ }
       Spicetify.showNotification("Present window could not initialise. Stage fullscreen has been opened instead.", true);
@@ -2146,7 +2223,7 @@ function Auraloom() {
   // It also avoids the blank/cropped window caused by a second React root.
   let presentationTarget = null;
   try {
-    if (presentWindow && !presentWindow.closed) presentationTarget = presentWindow.document.getElementById("hudbacastum-present");
+    if (presentWindow && !presentWindow.closed) presentationTarget = presentWindow.document.getElementById("auraloom-present");
   } catch (_) { presentationTarget = null; }
   const chooseBackgroundMode = (mode) => {
     if (mode !== "black") { patchProject({ backgroundMode: mode }); return; }

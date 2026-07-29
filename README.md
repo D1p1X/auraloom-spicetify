@@ -76,16 +76,16 @@ cd auraloom-spicetify
 npm run install:local
 ```
 
-The installer detects the operating system, copies the application files to the correct `CustomApps/hudbacastum` folder, enables the app in Spicetify and runs `spicetify apply`. Restart Spotify, then select the Auraloom waveform logo in the Custom Apps rail.
+The installer detects the operating system, copies the application files to the correct `CustomApps/Auraloom` folder, enables the app in Spicetify and runs `spicetify apply`. Restart Spotify, then select the Auraloom waveform logo in the Custom Apps rail.
 
 ### Manual install
 
 1. Download this repository as a ZIP and unpack it.
-2. Copy `index.js`, `style.css` and `manifest.json` into a folder called `hudbacastum` in your Spicetify `CustomApps` directory.
+2. Copy `index.js`, `style.css` and `manifest.json` into a folder called `Auraloom` in your Spicetify `CustomApps` directory.
 3. Enable and apply it:
 
 ```sh
-spicetify config custom_apps hudbacastum
+spicetify config custom_apps Auraloom
 spicetify apply
 ```
 
@@ -95,13 +95,13 @@ spicetify apply
 | Linux | `~/.config/spicetify/CustomApps/` (or the path selected by `SPICETIFY_CONFIG` / `XDG_CONFIG_HOME`) |
 | Windows | `%APPDATA%\spicetify\CustomApps\` |
 
-The folder name must remain `hudbacastum`: it is the internal Custom App route that Spotify/Spicetify registers. The visible product name is **Auraloom**.
+The folder name is `Auraloom`, matching the visible product name and the Spicetify Custom App route.
 
 ### If Auraloom does not appear in Spotify
 
 1. Fully quit Spotify, including its system-tray/menu-bar process, then open it again.
-2. Run `spicetify config custom_apps hudbacastum` and `spicetify apply` one more time.
-3. Confirm the files are directly inside `CustomApps/hudbacastum/` — not inside an extra ZIP or repository folder.
+2. Run `spicetify config custom_apps Auraloom` and `spicetify apply` one more time.
+3. Confirm the files are directly inside `CustomApps/Auraloom/` — not inside an extra ZIP or repository folder.
 4. After a Spotify update, re-run `spicetify apply`. Spotify updates can replace files modified by Spicetify.
 
 ### Marketplace
@@ -141,7 +141,7 @@ There are no runtime dependencies. The source is a ready-to-install Custom App f
 
 ```sh
 npm run check          # JavaScript syntax + manifest checks
-npm run build:release  # writes a clean dist/hudbacastum folder
+npm run build:release  # writes a clean dist/Auraloom folder
 npm run install:local  # copies to Spicetify and applies it locally
 ```
 
