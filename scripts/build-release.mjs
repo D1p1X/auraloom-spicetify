@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const release = resolve(root, "dist", "hudbacastum");
+const release = resolve(root, "dist", "Auraloom");
 const files = ["index.js", "style.css", "manifest.json", "README.md", "LICENSE"];
 
 const check = spawnSync(process.execPath, [resolve(root, "scripts", "check.mjs")], { cwd: root, stdio: "inherit" });
