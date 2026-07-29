@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const appFolder = "hudbacastum";
+const appFolder = "Auraloom";
 const configRoot = process.env.SPICETIFY_CONFIG || (process.platform === "win32"
   ? join(process.env.APPDATA || join(homedir(), "AppData", "Roaming"), "spicetify")
   : join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "spicetify"));
